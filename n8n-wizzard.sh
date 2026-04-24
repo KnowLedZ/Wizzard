@@ -225,6 +225,3 @@ echo ""
 echo "LOG:"
 echo "Main   : $MAIN_LOG"
 echo "Docker : $DOCKER_LOG"
-
-echo ""
-echo "[SUCCESS] Setup selesai"
