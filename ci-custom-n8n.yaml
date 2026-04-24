@@ -1,15 +1,20 @@
-  GNU nano 8.4                                                                               n8n.yaml                                                                                        
 #cloud-config
 package_update: false
 package_upgrade: false
 
 write_files:
+  # ==============================
+  # BOOTSTRAP SCRIPT (BASE64)
+  # ==============================
   - path: /root/setup-vm.sh
     permissions: '0755'
     encoding: b64
     content: |
       BASE64_KAMU_DI_SINI
 
+  # ==============================
+  # AUTO RUN SAAT LOGIN ROOT
+  # ==============================
   - path: /etc/profile.d/n8n-wizard.sh
     permissions: '0755'
     content: |
@@ -30,12 +35,24 @@ write_files:
       echo "      N8N FIRST LOGIN INSTALLER"
       echo "======================================"
       echo ""
+      echo "[INFO] Installer akan berjalan..."
+      echo "[INFO] Mohon tunggu sampai selesai"
+      echo ""
 
       # jalankan installer (foreground biar kelihatan)
       bash /root/setup-vm.sh
 
       # tandai selesai
       touch /root/.n8n_installed
+
+      echo ""
+      echo "[CLEANUP] Menghapus file installer..."
+      
+      rm -f /root/setup-vm.sh
+      rm -f /root/get-docker.sh
+      rm -f /root/n8n-installer.sh
+
+      echo "[OK] Cleanup selesai"
 
       echo ""
       echo "[INFO] Installation finished. Script will not run again."
