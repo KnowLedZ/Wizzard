@@ -156,7 +156,21 @@ echo "[OK] .env ready"
 # ==============================
 # DOCKER RUN
 # ==============================
-run_step "[5/6] Start containers" docker compose up -d
+echo "[...] Starting containers"
+docker compose up -d || true
+
+echo "[INFO] Waiting for PostgreSQL..."
+
+for i in {1..30}; do
+    STATUS=$(docker inspect --format='{{.State.Health.Status}}' n8n-postgres-1 2>/dev/null || echo "starting")
+    echo "[INFO] Postgres: $STATUS ($i/30)"
+
+    [[ "$STATUS" == "healthy" ]] && break
+    sleep 3
+done
+
+echo "[INFO] Ensuring all services running..."
+docker compose up -d
 
 # ==============================
 # WAIT
