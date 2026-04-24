@@ -183,6 +183,8 @@ echo "URL:"
 echo "Domain : http://$DOMAIN"
 echo "IP     : http://$IP:5678"
 
+echo "Installation Path : /opt/n8n/"
+
 echo ""
 echo "TOKEN:"
 echo "$RUNNERS_AUTH_TOKEN"
