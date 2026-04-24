@@ -31,6 +31,13 @@ echo "----------------------------------------"
 echo ""
 
 # ==============================
+# WIZARD CONFIRM
+# ==============================
+read -p "Start configuration wizard? (y/n): " CONFIRM
+[[ "$CONFIRM" != "y" ]] && echo "Cancelled." && exit 0
+
+
+# ==============================
 # INSTALL DOCKER
 # ==============================
 echo "[INFO] Waiting for apt/dpkg lock..."
@@ -54,11 +61,6 @@ systemctl start docker || service docker start || true
 sleep 3
 echo "[OK] Docker ready"
 
-# ==============================
-# WIZARD CONFIRM
-# ==============================
-read -p "Start configuration wizard? (y/n): " CONFIRM
-[[ "$CONFIRM" != "y" ]] && echo "Cancelled." && exit 0
 
 # ==============================
 # INPUT
