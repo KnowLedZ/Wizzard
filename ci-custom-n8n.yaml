@@ -1,0 +1,42 @@
+  GNU nano 8.4                                                                               n8n.yaml                                                                                        
+#cloud-config
+package_update: false
+package_upgrade: false
+
+write_files:
+  - path: /root/setup-vm.sh
+    permissions: '0755'
+    encoding: b64
+    content: |
+      BASE64_KAMU_DI_SINI
+
+  - path: /etc/profile.d/n8n-wizard.sh
+    permissions: '0755'
+    content: |
+      #!/bin/bash
+
+      # hanya untuk root
+      if [ "$USER" != "root" ]; then
+          return
+      fi
+
+      # hanya jalan sekali
+      if [ -f /root/.n8n_installed ]; then
+          return
+      fi
+
+      clear
+      echo "======================================"
+      echo "      N8N FIRST LOGIN INSTALLER"
+      echo "======================================"
+      echo ""
+
+      # jalankan installer (foreground biar kelihatan)
+      bash /root/setup-vm.sh
+
+      # tandai selesai
+      touch /root/.n8n_installed
+
+      echo ""
+      echo "[INFO] Installation finished. Script will not run again."
+      echo ""
