@@ -29,9 +29,9 @@ run_step() {
 clear
 
 echo "----------------------------------------"
-echo "   n8n Wizard Configuration v1.0"
+echo "   N8N Wizard Configuration v1.0"
 echo "----------------------------------------"
-echo ""
+echo "Start"
 
 # ==============================
 # CONFIRMATION
