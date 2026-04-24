@@ -3,9 +3,9 @@
 # ==============================
 # SAFETY & LOGGING
 # ==============================
-set -e
+# set -e
 
-LOG_FILE="/root/n8n-wizard.log"
+LOG_FILE="/var/log/install-n8n.log"
 exec > >(tee -a "$LOG_FILE") 2>&1
 
 # ==============================
