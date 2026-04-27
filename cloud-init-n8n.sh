@@ -5,7 +5,7 @@ set -e
 LOG_FILE="/var/log/bootstrap-n8n.log"
 exec > >(tee -a "$LOG_FILE") 2>&1
 
-URL_SCRIPT="https://raw.githubusercontent.com/muh-yazid/Wizzard/main/n8n-wizzard.sh"
+URL_SCRIPT="https://raw.githubusercontent.com/KnowLedZ/Wizzard/main/n8n-wizzard.sh"
 
 echo "======================================"
 echo "     N8N BOOTSTRAP INITIALIZER"
@@ -25,4 +25,4 @@ echo ""
 
 bash /root/n8n-installer.sh
 
-echo "Wizzar : $LOG_FILE"
+echo "Wizzard : $LOG_FILE"
