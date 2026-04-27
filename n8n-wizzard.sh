@@ -59,8 +59,6 @@ run_bg() {
 # WAIT APT LOCK (FIXED)
 # ==============================
 wait_apt() {
-    echo "[INFO] Waiting apt lock..."
-
     SP='-\|/'
     i=0
 
@@ -100,8 +98,10 @@ run_bg "[3/6] Start Docker" bash -c "systemctl start docker || service docker st
 # ==============================
 # INPUT
 # ==============================
+echo ""
 read -p "Enter domain: " DOMAIN
 
+echo ""
 echo "=== PostgreSQL ==="
 
 read -p "POSTGRES_USER: " POSTGRES_USER
