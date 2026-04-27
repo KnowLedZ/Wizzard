@@ -11,21 +11,21 @@ exec > >(tee -a "$LOG_FILE") 2>&1
 # SPINNER
 # ==============================
 spinner() {
-    local pid=$1
+    local msg="$1"
     local spin='-\|/'
     local i=0
-    while kill -0 $pid 2>/dev/null; do
+
+    while true; do
         i=$(( (i+1) %4 ))
-        printf "\r[%c] Working..." "${spin:$i:1}"
+        printf "\r[%c] %s" "${spin:$i:1}" "$msg"
         sleep 0.2
     done
-    printf "\r"
 }
 
 # ==============================
-# SAFE BACKGROUND RUNNER
+# RUN BACKGROUND + SPINNER
 # ==============================
-run_step_bg() {
+run_with_spinner() {
     DESC="$1"
     shift
 
@@ -35,23 +35,30 @@ run_step_bg() {
     echo "======================================"
 
     "$@" >> "$LOG_FILE" 2>&1 &
-    PID=$!
+    CMD_PID=$!
 
-    spinner $PID
+    spinner "$DESC..." &
+    SPIN_PID=$!
 
-    if wait $PID; then
-        echo "[OK] $DESC"
-    else
+    wait $CMD_PID
+    RESULT=$?
+
+    kill $SPIN_PID >/dev/null 2>&1 || true
+    printf "\r"
+
+    if [ $RESULT -ne 0 ]; then
         echo "[ERROR] $DESC gagal"
         echo "[INFO] Check log: $LOG_FILE"
         exit 1
     fi
+
+    echo "[OK] $DESC"
 }
 
 # ==============================
-# FOREGROUND STEP (WAJIB untuk critical)
+# RUN FOREGROUND (CRITICAL)
 # ==============================
-run_step_fg() {
+run_fg() {
     DESC="$1"
     shift
 
@@ -64,7 +71,6 @@ run_step_fg() {
         echo "[OK] $DESC"
     else
         echo "[ERROR] $DESC gagal"
-        echo "[INFO] Check log: $LOG_FILE"
         exit 1
     fi
 }
@@ -81,7 +87,7 @@ read -p "Start wizard? (y/n): " CONFIRM
 [[ "$CONFIRM" != "y" ]] && exit 0
 
 # ==============================
-# WAIT APT LOCK (PAKAI SPINNER)
+# WAIT APT LOCK (FIXED SPINNER)
 # ==============================
 echo "[INFO] Waiting apt lock..."
 
@@ -91,17 +97,23 @@ echo "[INFO] Waiting apt lock..."
     done
 ) &
 
-spinner $!
-wait $!
+WAIT_PID=$!
+
+spinner "Waiting apt lock..." &
+SPIN_PID=$!
+
+wait $WAIT_PID
+kill $SPIN_PID >/dev/null 2>&1 || true
+printf "\r"
 
 echo "[OK] apt ready"
 
 # ==============================
-# INSTALL DOCKER (CRITICAL → FG)
+# INSTALL DOCKER
 # ==============================
-run_step_bg "Download Docker" curl -fsSL https://get.docker.com -o get-docker.sh
+run_with_spinner "Download Docker" curl -fsSL https://get.docker.com -o get-docker.sh
 
-run_step_fg "Install Docker" sh get-docker.sh
+run_fg "Install Docker" sh get-docker.sh
 
 echo "[INFO] Starting Docker..."
 systemctl start docker || service docker start || true
@@ -118,7 +130,6 @@ read -p "POSTGRES_USER: " POSTGRES_USER
 while true; do
     read -s -p "POSTGRES_PASSWORD: " P1; echo ""
     read -s -p "Re-enter: " P2; echo ""
-
     [[ "$P1" == "$P2" && -n "$P1" ]] && break
     echo "[ERROR] Password mismatch"
 done
@@ -131,7 +142,6 @@ read -p "POSTGRES_NON_ROOT_USER: " POSTGRES_NON_ROOT_USER
 while true; do
     read -s -p "POSTGRES_NON_ROOT_PASSWORD: " P1; echo ""
     read -s -p "Re-enter: " P2; echo ""
-
     [[ "$P1" == "$P2" && -n "$P1" ]] && break
     echo "[ERROR] Password mismatch"
 done
@@ -145,9 +155,9 @@ mkdir -p "$INSTALL_DIR"
 cd "$INSTALL_DIR"
 
 # ==============================
-# CLONE REPO
+# CLONE
 # ==============================
-run_step_bg "Clone repo" git clone https://github.com/KnowLedZ/n8n-http.git . || true
+run_with_spinner "Clone repo" git clone https://github.com/KnowLedZ/n8n-http.git . || true
 
 IP=$(hostname -I | awk '{print $1}')
 
@@ -171,12 +181,9 @@ EOF
 echo "[OK] .env ready"
 
 # ==============================
-# START DOCKER (CRITICAL → FG)
+# DOCKER START (CRITICAL)
 # ==============================
-echo ""
-echo "[INFO] Starting containers..."
-
-docker compose up -d | tee -a "$DOCKER_LOG"
+run_fg "Starting containers" docker compose up -d
 
 # ==============================
 # WAIT POSTGRES
@@ -185,19 +192,12 @@ echo "[INFO] Waiting PostgreSQL..."
 
 for i in {1..40}; do
     STATUS=$(docker inspect --format='{{.State.Health.Status}}' n8n-postgres-1 2>/dev/null || echo "starting")
-
     printf "\r[INFO] Postgres: %-10s (%d/40)" "$STATUS" "$i"
 
     [[ "$STATUS" == "healthy" ]] && break
     sleep 3
 done
-
 echo ""
-
-# ==============================
-# ENSURE RUNNING
-# ==============================
-docker compose up -d >> "$DOCKER_LOG" 2>&1
 
 # ==============================
 # WAIT N8N
@@ -206,21 +206,18 @@ echo "[INFO] Waiting n8n..."
 
 for i in {1..40}; do
     RUNNING=$(docker ps --format '{{.Names}}' | grep -c n8n-n8n-1 || true)
-
     printf "\r[INFO] n8n: %d (%d/40)" "$RUNNING" "$i"
 
     [[ "$RUNNING" -ge 1 ]] && break
     sleep 3
 done
-
 echo ""
 
 # ==============================
-# CLEANUP (PINDAH KE AKHIR)
+# CLEANUP (SAFE)
 # ==============================
-echo "[INFO] Cleaning up..."
+echo "[INFO] Cleanup..."
 rm -f /root/get-docker.sh
-
 echo "[OK] Cleanup done"
 
 # ==============================
@@ -237,10 +234,6 @@ echo "IP     : http://$IP:5678"
 echo ""
 echo "TOKEN:"
 echo "$RUNNERS_AUTH_TOKEN"
-
-echo ""
-echo "PATH:"
-echo "$INSTALL_DIR"
 
 echo ""
 echo "LOG:"
