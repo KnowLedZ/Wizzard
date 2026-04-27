@@ -8,7 +8,25 @@ DOCKER_LOG="/var/log/n8n-docker.log"
 exec > >(tee -a "$MAIN_LOG") 2>&1
 
 # ==============================
-# HELPER
+# SPINNER
+# ==============================
+spinner() {
+    local pid=$1
+    local msg=$2
+    local spin='-\|/'
+    local i=0
+
+    while kill -0 $pid 2>/dev/null; do
+        i=$(( (i+1) %4 ))
+        printf "\r[INFO] %s... %s" "$msg" "${spin:$i:1}"
+        sleep 0.2
+    done
+
+    printf "\r"
+}
+
+# ==============================
+# RUN BACKGROUND STEP
 # ==============================
 run_bg() {
     STEP="$1"
@@ -22,15 +40,7 @@ run_bg() {
     "$@" >> "$MAIN_LOG" 2>&1 &
     PID=$!
 
-    SP='-\|/'
-    i=0
-
-    while kill -0 $PID 2>/dev/null; do
-        i=$(( (i+1) %4 ))
-        printf "\r[INFO] %s... %s" "$STEP" "${SP:$i:1}"
-        sleep 0.3
-    done
-
+    spinner $PID "$STEP"
     wait $PID
     STATUS=$?
 
@@ -45,24 +55,21 @@ run_bg() {
     echo "[OK] $STEP"
 }
 
+# ==============================
+# WAIT APT LOCK (FIXED)
+# ==============================
 wait_apt() {
-    echo "[...] Waiting for apt lock..."
-
-    (
-    while fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; do
-        sleep 1
-    done
-    ) &
-
-    PID=$!
+    echo "[INFO] Waiting apt lock..."
 
     SP='-\|/'
     i=0
 
-    while kill -0 $PID 2>/dev/null; do
+    while fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1 || \
+          fuser /var/lib/apt/lists/lock >/dev/null 2>&1; do
+
         i=$(( (i+1) %4 ))
         printf "\r[INFO] Waiting apt... %s" "${SP:$i:1}"
-        sleep 0.3
+        sleep 1
     done
 
     echo ""
@@ -82,7 +89,7 @@ read -p "Start configuration wizard? (y/n): " CONFIRM
 [[ "$CONFIRM" != "y" ]] && echo "Cancelled." && exit 0
 
 # ==============================
-# DOCKER INSTALL
+# INSTALL DOCKER
 # ==============================
 wait_apt
 
@@ -105,6 +112,7 @@ while true; do
 
     [[ "$P1" != "$P2" ]] && echo "[ERROR] Not match!" && continue
     [[ -z "$P1" ]] && echo "[ERROR] Empty!" && continue
+
     POSTGRES_PASSWORD="$P1"
     break
 done
@@ -118,6 +126,7 @@ while true; do
 
     [[ "$P1" != "$P2" ]] && echo "[ERROR] Not match!" && continue
     [[ -z "$P1" ]] && echo "[ERROR] Empty!" && continue
+
     POSTGRES_NON_ROOT_PASSWORD="$P1"
     break
 done
@@ -160,36 +169,30 @@ EOF
 echo "[OK] .env ready"
 
 # ==============================
-# DOCKER START
+# START DOCKER (FIX UTAMA)
 # ==============================
-echo "[...] Starting containers"
-docker compose up -d >> "$DOCKER_LOG" 2>&1 &
-
-PID=$!
-SP='-\|/'
-i=0
-
-while kill -0 $PID 2>/dev/null; do
-    i=$(( (i+1) %4 ))
-    printf "\r[INFO] Deploying containers... %s" "${SP:$i:1}"
-    sleep 0.3
-done
-
-wait $PID
 echo ""
-echo "[OK] Containers started"
+echo "[...] Starting containers"
+
+docker compose up -d >> "$DOCKER_LOG" 2>&1
+echo "[OK] Containers created"
 
 # ==============================
-# WAIT POSTGRES
+# WAIT POSTGRES (REAL PROGRESS)
 # ==============================
 echo "[INFO] Waiting PostgreSQL..."
 
-for i in {1..30}; do
-    STATUS=$(docker inspect --format='{{.State.Health.Status}}' $(docker ps -a --format '{{.Names}}' | grep postgres | head -n1) 2>/dev/null || echo "starting")
+for i in {1..60}; do
+    STATUS=$(docker inspect --format='{{.State.Health.Status}}' \
+        $(docker ps -a --format '{{.Names}}' | grep postgres | head -n1) \
+        2>/dev/null || echo "starting")
 
-    printf "\r[INFO] Postgres: %s (%d/30)" "$STATUS" "$i"
+    printf "\r[INFO] Postgres: %-10s (%d/60)" "$STATUS" "$i"
 
-    [[ "$STATUS" == "healthy" ]] && break
+    if [[ "$STATUS" == "healthy" ]]; then
+        break
+    fi
+
     sleep 2
 done
 
@@ -197,9 +200,26 @@ echo ""
 echo "[OK] PostgreSQL ready"
 
 # ==============================
-# ENSURE FINAL
+# FINAL ENSURE
 # ==============================
 docker compose up -d >> "$DOCKER_LOG" 2>&1
+
+# ==============================
+# WAIT N8N
+# ==============================
+echo "[INFO] Waiting n8n..."
+
+for i in {1..60}; do
+    RUNNING=$(docker ps --format '{{.Names}}' | grep -c n8n || true)
+
+    printf "\r[INFO] n8n: %d (%d/60)" "$RUNNING" "$i"
+
+    [[ "$RUNNING" -ge 1 ]] && break
+    sleep 2
+done
+
+echo ""
+echo "[OK] n8n running"
 
 # ==============================
 # DONE
