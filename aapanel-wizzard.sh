@@ -26,28 +26,40 @@ spinner() {
 }
 
 # ==============================
-# WAIT APT / YUM LOCK
+# WAIT APT LOCK (unlimited, spinner)
 # ==============================
 wait_pkg_manager() {
-    if [ -f "/usr/bin/apt-get" ]; then
-        echo "[INFO] Preparing apt (production-safe)..."
-        local MAX_RETRIES=30
-        local retries=0
-        while [ $retries -lt $MAX_RETRIES ]; do
-            if ! fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1 && \
-               ! fuser /var/lib/apt/lists/lock >/dev/null 2>&1; then
-                break
-            fi
-            retries=$((retries + 1))
-            printf "\r[WAIT] apt locked... retry (%d/%d)" "$retries" "$MAX_RETRIES"
-            sleep 2
-        done
-        printf "\r"
-        if [ $retries -ge $MAX_RETRIES ]; then
-            echo "[ERROR] apt-get lock timeout after $MAX_RETRIES retries"
-            exit 1
-        fi
+    if [ ! -f "/usr/bin/apt-get" ]; then
+        echo "[OK] apt ready"
+        return
     fi
+
+    echo "[INFO] Preparing apt (production-safe)..."
+
+    # Tunggu sampai semua lock bebas, tanpa batas retry
+    (
+        while fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1 || \
+              fuser /var/lib/apt/lists/lock >/dev/null 2>&1 || \
+              fuser /var/lib/dpkg/lock >/dev/null 2>&1 || \
+              fuser /var/cache/apt/archives/lock >/dev/null 2>&1; do
+            sleep 1
+        done
+    ) &
+
+    local WAIT_PID=$!
+    local spin='-\|/'
+    local i=0
+    local elapsed=0
+
+    while kill -0 $WAIT_PID 2>/dev/null; do
+        i=$(( (i+1) % 4 ))
+        printf "\r[WAIT] apt locked... %s (%ds elapsed)" "${spin:$i:1}" "$elapsed"
+        sleep 0.5
+        elapsed=$(( elapsed + 1 ))
+    done
+
+    wait $WAIT_PID
+    printf "\r%-60s\r" " "
     echo "[OK] apt ready"
 }
 
@@ -190,16 +202,24 @@ echo "------------------------------------------"
 
 INSTALL_SCRIPT="/root/aapanel-installer.sh"
 
-echo "[INFO] Downloading aaPanel installer..."
-curl -sSL -o "$INSTALL_SCRIPT" \
-    "https://raw.githubusercontent.com/KnowLedZ/Wizzard/main/aapanel-install.sh" \
-    2>>"$MAIN_LOG" || \
-curl -sSL -o "$INSTALL_SCRIPT" \
-    "https://www.aapanel.com/script/install_7.0_en.sh" \
-    2>>"$MAIN_LOG" || {
-        echo "[ERROR] Failed to download aaPanel installer"
-        exit 1
-    }
+(
+    curl -sSL -o "$INSTALL_SCRIPT" \
+        "https://raw.githubusercontent.com/KnowLedZ/Wizzard/main/aapanel-install.sh" \
+        2>>"$MAIN_LOG" || \
+    curl -sSL -o "$INSTALL_SCRIPT" \
+        "https://www.aapanel.com/script/install_7.0_en.sh" \
+        2>>"$MAIN_LOG"
+) &
+
+DL_PID=$!
+spinner $DL_PID "Downloading installer"
+wait $DL_PID
+DL_EXIT=$?
+
+if [ $DL_EXIT -ne 0 ] || [ ! -s "$INSTALL_SCRIPT" ]; then
+    echo "[ERROR] Failed to download aaPanel installer"
+    exit 1
+fi
 
 chmod +x "$INSTALL_SCRIPT"
 echo "[OK] Installer downloaded"
@@ -215,19 +235,21 @@ echo ""
 echo "[INFO] This may take several minutes..."
 echo ""
 
-PANEL_PORT="$PANEL_PORT" \
-PANEL_USER="$PANEL_USER" \
-PANEL_PASSWORD="$PANEL_PASSWORD" \
-SAFE_PATH="$SAFE_PATH" \
-    bash "$INSTALL_SCRIPT" $SSL_FLAG -y >> "$MAIN_LOG" 2>&1 &
+(
+    PANEL_PORT="$PANEL_PORT" \
+    PANEL_USER="$PANEL_USER" \
+    PANEL_PASSWORD="$PANEL_PASSWORD" \
+    SAFE_PATH="$SAFE_PATH" \
+        bash "$INSTALL_SCRIPT" $SSL_FLAG -y >> "$MAIN_LOG" 2>&1
+) &
 
-PID=$!
-spinner $PID "Installing aaPanel"
-wait $PID
-EXIT_CODE=$?
+INST_PID=$!
+spinner $INST_PID "Installing aaPanel"
+wait $INST_PID
+INST_EXIT=$?
 
-if [ $EXIT_CODE -ne 0 ]; then
-    echo "[ERROR] aaPanel installer failed! (exit $EXIT_CODE)"
+if [ $INST_EXIT -ne 0 ]; then
+    echo "[ERROR] aaPanel installer failed! (exit $INST_EXIT)"
     echo "[INFO] Check log: $MAIN_LOG"
     exit 1
 fi
@@ -242,22 +264,25 @@ echo "------------------------------------------"
 echo "[STEP 5/6] Waiting for panel"
 echo "------------------------------------------"
 
-for i in {1..60}; do
+PANEL_RUNNING=false
+ELAPSED=0
+
+while true; do
     PANEL_STATUS=$(ps aux | grep 'BT-Panel' | grep -v grep | awk '{print $2}')
-    printf "\r[INFO] Panel status: %-10s (%d/60)" \
-        "$([[ -n $PANEL_STATUS ]] && echo running || echo starting)" "$i"
-    [[ -n "$PANEL_STATUS" ]] && break
+    printf "\r[INFO] Panel status: %-10s (%ds)" \
+        "$([[ -n $PANEL_STATUS ]] && echo running || echo starting)" "$ELAPSED"
+
+    if [ -n "$PANEL_STATUS" ]; then
+        PANEL_RUNNING=true
+        break
+    fi
+
     sleep 2
+    ELAPSED=$(( ELAPSED + 2 ))
 done
-echo ""
 
-if [ -z "$PANEL_STATUS" ]; then
-    echo "[ERROR] Panel did not start within timeout"
-    echo "[INFO] Check log: $MAIN_LOG"
-    exit 1
-fi
-
-echo "[OK] Panel running"
+printf "\r%-60s\r" " "
+echo "[OK] Panel running (${ELAPSED}s)"
 
 # ==============================
 # STEP 6 - FINALIZING
@@ -267,26 +292,32 @@ echo "------------------------------------------"
 echo "[STEP 6/6] Finalizing"
 echo "------------------------------------------"
 
+# Baca port aktual dari file panel
+PANEL_PORT_FILE=$(cat /www/server/panel/data/port.pl 2>/dev/null || echo "$PANEL_PORT")
+
 # Verify port
 PORT_OPEN=false
 for i in {1..10}; do
-    if ss -lnt 2>/dev/null | grep -q ":$PANEL_PORT" || \
-       netstat -lnt 2>/dev/null | grep -q ":$PANEL_PORT"; then
+    if ss -lnt 2>/dev/null | grep -q ":${PANEL_PORT_FILE}" || \
+       netstat -lnt 2>/dev/null | grep -q ":${PANEL_PORT_FILE}"; then
         PORT_OPEN=true
         break
     fi
+    printf "\r[WAIT] Checking port %s... (%d/10)" "$PANEL_PORT_FILE" "$i"
     sleep 2
 done
+printf "\r%-60s\r" " "
 
-# Get IP
+# Get public IP only
 IP_PUBLIC=$(curl -4 -sS --connect-timeout 10 -m 15 https://ifconfig.me 2>/dev/null || \
-            hostname -I | awk '{print $1}')
-IP_LOCAL=$(hostname -I | awk '{print $1}')
+            curl -4 -sS --connect-timeout 10 -m 15 https://api.ipify.org 2>/dev/null || \
+            curl -4 -sS --connect-timeout 10 -m 15 https://icanhazip.com 2>/dev/null || \
+            echo "YOUR_SERVER_IP")
 
-# Get real credentials from panel
-FINAL_USER=$(cat /www/server/panel/default.pl 2>/dev/null | head -1 || echo "$PANEL_USER")
+# Baca safe path aktual dari file panel
+AUTH_PATH=$(cat /www/server/panel/data/admin_path.pl 2>/dev/null || echo "/$SAFE_PATH")
 
-echo "[INFO] Container/process status:"
+echo "[INFO] Process status:"
 ps aux | grep BT-Panel | grep -v grep || true
 
 # ==============================
@@ -298,8 +329,7 @@ echo "      INSTALLATION COMPLETE"
 echo "======================================"
 echo ""
 echo "URL:"
-echo "  Internet : http://${IP_PUBLIC}:${PANEL_PORT}/${SAFE_PATH}"
-echo "  Local    : http://${IP_LOCAL}:${PANEL_PORT}/${SAFE_PATH}"
+echo "  http://${IP_PUBLIC}:${PANEL_PORT_FILE}${AUTH_PATH}"
 echo ""
 echo "CREDENTIALS:"
 echo "  Username : $PANEL_USER"
@@ -307,9 +337,9 @@ echo "  Password : $PANEL_PASSWORD"
 echo ""
 echo "PORT STATUS:"
 if [ "$PORT_OPEN" = true ]; then
-    echo "  [OK] Port $PANEL_PORT is open"
+    echo "  [OK] Port $PANEL_PORT_FILE is open"
 else
-    echo "  [WARNING] Port $PANEL_PORT belum terbuka!"
+    echo "  [WARNING] Port $PANEL_PORT_FILE belum terbuka!"
     echo "  [INFO] Cek firewall / security group"
 fi
 echo ""
@@ -319,9 +349,10 @@ echo ""
 echo "======================================"
 
 # ==============================
-# CLEANUP
+# CLEANUP & BOOTSTRAP LOG
 # ==============================
 echo "" >> "$BOOTSTRAP_LOG"
 echo "[INFO] Bootstrap selesai: $(date)" >> "$BOOTSTRAP_LOG"
+
 echo "[OK] Bootstrap selesai"
 echo "[INFO] Log: $BOOTSTRAP_LOG"
