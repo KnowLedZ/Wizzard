@@ -1,5 +1,6 @@
 #!/bin/bash
 
+clear
 set -e
 
 MAIN_LOG="/var/log/n8n-install.log"
@@ -78,12 +79,16 @@ git clone https://github.com/KnowLedZ/n8n-http.git . || true
 IP=$(hostname -I | awk '{print $1}')
 
 cat <<EOF > .env
+N8N_VERSION=stable
+
 POSTGRES_USER=$POSTGRES_USER
 POSTGRES_PASSWORD=$POSTGRES_PASSWORD
 POSTGRES_DB=$POSTGRES_DB
 POSTGRES_NON_ROOT_USER=$POSTGRES_NON_ROOT_USER
 POSTGRES_NON_ROOT_PASSWORD=$POSTGRES_NON_ROOT_PASSWORD
+
 RUNNERS_AUTH_TOKEN=$RUNNERS_AUTH_TOKEN
+
 FQDN=$IP
 EOF
 
