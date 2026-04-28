@@ -17,7 +17,7 @@ spinner() {
     local i=0
 
     while kill -0 $pid 2>/dev/null; do
-        i=$(( (i+1) %4 ))
+        i=$(( (i+1) % 4 ))
         printf "\r[INFO] %s... %s" "$msg" "${spin:$i:1}"
         sleep 0.2
     done
@@ -107,6 +107,36 @@ detect_os() {
 
     echo "[INFO] OS: $(uname -a)"
     echo "[INFO] Package manager: $PM"
+}
+
+# ==============================
+# CHECK PANEL PROCESS
+# ==============================
+check_panel_running() {
+    # Cek semua kemungkinan nama proses aaPanel
+    local PID=""
+    PID=$(ps aux | grep -E 'BT-Panel|btpanel|panel\.py' | grep -v grep | awk '{print $2}' | head -1)
+
+    # Fallback: cek via PID file
+    if [ -z "$PID" ]; then
+        local PIDFILE="/www/server/panel/logs/panel.pid"
+        if [ -f "$PIDFILE" ]; then
+            local STORED_PID
+            STORED_PID=$(cat "$PIDFILE" 2>/dev/null)
+            [ -n "$STORED_PID" ] && kill -0 "$STORED_PID" 2>/dev/null && PID="$STORED_PID"
+        fi
+    fi
+
+    # Fallback: cek via port file
+    if [ -z "$PID" ]; then
+        local PORT
+        PORT=$(cat /www/server/panel/data/port.pl 2>/dev/null || echo "")
+        if [ -n "$PORT" ]; then
+            PID=$(ss -lntp 2>/dev/null | grep ":$PORT" | grep -oP 'pid=\K[0-9]+' | head -1)
+        fi
+    fi
+
+    echo "$PID"
 }
 
 # ==============================
@@ -231,7 +261,6 @@ echo ""
 echo "------------------------------------------"
 echo "[STEP 4/6] Running aaPanel installer"
 echo "------------------------------------------"
-echo ""
 echo "[INFO] This may take several minutes..."
 echo ""
 
@@ -264,25 +293,28 @@ echo "------------------------------------------"
 echo "[STEP 5/6] Waiting for panel"
 echo "------------------------------------------"
 
-PANEL_RUNNING=false
 ELAPSED=0
+spin='-\|/'
+si=0
 
 while true; do
-    PANEL_STATUS=$(ps aux | grep 'BT-Panel' | grep -v grep | awk '{print $2}')
-    printf "\r[INFO] Panel status: %-10s (%ds)" \
-        "$([[ -n $PANEL_STATUS ]] && echo running || echo starting)" "$ELAPSED"
+    si=$(( (si+1) % 4 ))
+    PANEL_PID=$(check_panel_running)
 
-    if [ -n "$PANEL_STATUS" ]; then
-        PANEL_RUNNING=true
+    printf "\r[INFO] Panel: %-10s %s (%ds)" \
+        "$( [ -n "$PANEL_PID" ] && echo "running" || echo "starting" )" \
+        "${spin:$si:1}" \
+        "$ELAPSED"
+
+    if [ -n "$PANEL_PID" ]; then
+        printf "\r%-60s\r" " "
+        echo "[OK] Panel running (PID: $PANEL_PID, ${ELAPSED}s)"
         break
     fi
 
     sleep 2
     ELAPSED=$(( ELAPSED + 2 ))
 done
-
-printf "\r%-60s\r" " "
-echo "[OK] Panel running (${ELAPSED}s)"
 
 # ==============================
 # STEP 6 - FINALIZING
@@ -295,15 +327,19 @@ echo "------------------------------------------"
 # Baca port aktual dari file panel
 PANEL_PORT_FILE=$(cat /www/server/panel/data/port.pl 2>/dev/null || echo "$PANEL_PORT")
 
-# Verify port
+# Verify port dengan spinner
 PORT_OPEN=false
-for i in {1..10}; do
+spin='-\|/'
+si=0
+for i in $(seq 1 10); do
+    si=$(( (si+1) % 4 ))
     if ss -lnt 2>/dev/null | grep -q ":${PANEL_PORT_FILE}" || \
        netstat -lnt 2>/dev/null | grep -q ":${PANEL_PORT_FILE}"; then
         PORT_OPEN=true
         break
     fi
-    printf "\r[WAIT] Checking port %s... (%d/10)" "$PANEL_PORT_FILE" "$i"
+    printf "\r[WAIT] Checking port %s... %s (%d/10)" \
+        "$PANEL_PORT_FILE" "${spin:$si:1}" "$i"
     sleep 2
 done
 printf "\r%-60s\r" " "
@@ -318,7 +354,7 @@ IP_PUBLIC=$(curl -4 -sS --connect-timeout 10 -m 15 https://ifconfig.me 2>/dev/nu
 AUTH_PATH=$(cat /www/server/panel/data/admin_path.pl 2>/dev/null || echo "/$SAFE_PATH")
 
 echo "[INFO] Process status:"
-ps aux | grep BT-Panel | grep -v grep || true
+ps aux | grep -E 'BT-Panel|btpanel|panel\.py' | grep -v grep || true
 
 # ==============================
 # DONE
