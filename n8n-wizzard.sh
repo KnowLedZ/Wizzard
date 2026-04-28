@@ -113,6 +113,7 @@ echo "=== PostgreSQL ==="
 
 read -p "POSTGRES_USER: " POSTGRES_USER
 
+echo ""
 while true; do
     read -s -p "POSTGRES_PASSWORD: " P1; echo ""
     read -s -p "Re-enter POSTGRES_PASSWORD: " P2; echo ""
@@ -123,9 +124,13 @@ while true; do
     POSTGRES_PASSWORD="$P1"
     break
 done
+
 echo ""
 read -p "POSTGRES_DB: " POSTGRES_DB
+
+echo ""
 read -p "POSTGRES_NON_ROOT_USER: " POSTGRES_NON_ROOT_USER
+echo ""
 
 while true; do
     read -s -p "POSTGRES_NON_ROOT_PASSWORD: " P1; echo ""
@@ -178,7 +183,7 @@ echo "[OK] .env ready"
 # ==============================
 # START DOCKER (FIX UTAMA)
 # ==============================
-echo ""
+run_bg "[6/6] Starting N8N containers"
 echo "[...] Starting containers"
 
 docker compose up -d >> "$DOCKER_LOG" 2>&1
