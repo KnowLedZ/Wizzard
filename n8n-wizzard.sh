@@ -8,47 +8,80 @@ DOCKER_LOG="/var/log/n8n-docker.log"
 exec > >(tee -a "$MAIN_LOG") 2>&1
 
 # ==============================
-# SPINNER
+# PROGRESS BAR
 # ==============================
-spin_wait() {
-    local pid=$1
+progress_bar() {
+    local duration=$1
     local msg="$2"
-    local spin='-\|/'
-    local i=0
 
-    while kill -0 $pid 2>/dev/null; do
-        i=$(( (i+1) %4 ))
-        printf "\r[INFO] %s... %s" "$msg" "${spin:$i:1}"
-        sleep 0.2
+    local elapsed=0
+    local width=30
+
+    while [ $elapsed -lt $duration ]; do
+        local percent=$(( elapsed * 100 / duration ))
+        local filled=$(( percent * width / 100 ))
+        local empty=$(( width - filled ))
+
+        printf "\r[INFO] %-25s [" "$msg"
+        printf "%0.s#" $(seq 1 $filled)
+        printf "%0.s-" $(seq 1 $empty)
+        printf "] %d%%" "$percent"
+
+        sleep 1
+        elapsed=$((elapsed+1))
     done
-    printf "\r"
-}
 
-run_bg() {
-    local msg="$1"
-    shift
-
-    "$@" >> "$MAIN_LOG" 2>&1 &
-    pid=$!
-
-    spin_wait $pid "$msg"
-    wait $pid
+    printf "\r[OK] %-25s\n" "$msg"
 }
 
 # ==============================
-# WAIT APT
+# WAIT APT (PRODUCTION SAFE)
 # ==============================
-wait_apt() {
-    echo "[INFO] Checking apt lock..."
+wait_apt_stable() {
+    echo "[INFO] Preparing apt (production-safe)..."
 
-    while fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1 || \
-          fuser /var/lib/apt/lists/lock >/dev/null 2>&1; do
-        printf "\r[INFO] Waiting apt..."
+    # stop auto apt sementara
+    systemctl stop apt-daily.service 2>/dev/null || true
+    systemctl stop apt-daily-upgrade.service 2>/dev/null || true
+    systemctl kill --kill-who=all apt-daily.service 2>/dev/null || true
+    systemctl kill --kill-who=all apt-daily-upgrade.service 2>/dev/null || true
+
+    # tunggu lock hilang
+    for i in {1..30}; do
+        if ! fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1 && \
+           ! fuser /var/lib/apt/lists/lock >/dev/null 2>&1; then
+            echo "[OK] apt ready"
+            return
+        fi
+
+        printf "\r[INFO] Waiting apt lock... (%d/30)" "$i"
         sleep 1
     done
 
     echo ""
-    echo "[OK] apt ready"
+    echo "[ERROR] apt masih terkunci!"
+    exit 1
+}
+
+# ==============================
+# INSTALL DOCKER (RETRY)
+# ==============================
+install_docker() {
+    for i in {1..3}; do
+        echo "[INFO] Install Docker attempt $i..."
+
+        if sh get-docker.sh >> "$MAIN_LOG" 2>&1; then
+            echo "[OK] Docker installed"
+            return
+        fi
+
+        echo "[WARN] Retry install Docker..."
+        sleep 5
+        wait_apt_stable
+    done
+
+    echo "[ERROR] Docker install failed"
+    exit 1
 }
 
 # ==============================
@@ -65,19 +98,23 @@ CONFIRM=${CONFIRM:-Y}
 [[ ! "$CONFIRM" =~ ^[Yy]$ ]] && exit 0
 
 # ==============================
-# STEP 1
+# STEP 1 SYSTEM
 # ==============================
 echo ""
 echo "------------------------------------------"
 echo "[STEP 1/6] Prepare system"
 echo "------------------------------------------"
 
-wait_apt
+wait_apt_stable
 
-run_bg "Download Docker" curl -fsSL https://get.docker.com -o get-docker.sh
-run_bg "Install Docker" sh get-docker.sh
-run_bg "Start Docker" bash -c "systemctl start docker || service docker start || true"
+echo "[INFO] Download Docker..."
+curl -fsSL https://get.docker.com -o get-docker.sh >> "$MAIN_LOG" 2>&1
 
+progress_bar 3 "Preparing Docker install"
+
+install_docker
+
+systemctl start docker || service docker start || true
 echo "[OK] Docker ready"
 
 # ==============================
@@ -85,7 +122,7 @@ echo "[OK] Docker ready"
 # ==============================
 echo ""
 echo "------------------------------------------"
-echo "[STEP 2/6] Configuration input"
+echo "[STEP 2/6] Configuration setup"
 echo "------------------------------------------"
 
 read -p "Domain: " DOMAIN
@@ -94,11 +131,9 @@ read -p "POSTGRES_USER: " POSTGRES_USER
 while true; do
     read -s -p "POSTGRES_PASSWORD: " P1; echo ""
     read -s -p "Re-enter password: " P2; echo ""
-
     [[ "$P1" == "$P2" && -n "$P1" ]] && break
     echo "[ERROR] Password mismatch"
 done
-
 POSTGRES_PASSWORD=$P1
 
 read -p "POSTGRES_DB: " POSTGRES_DB
@@ -107,11 +142,9 @@ read -p "POSTGRES_NON_ROOT_USER: " POSTGRES_NON_ROOT_USER
 while true; do
     read -s -p "POSTGRES_NON_ROOT_PASSWORD: " P1; echo ""
     read -s -p "Re-enter password: " P2; echo ""
-
     [[ "$P1" == "$P2" && -n "$P1" ]] && break
     echo "[ERROR] Password mismatch"
 done
-
 POSTGRES_NON_ROOT_PASSWORD=$P1
 
 RUNNERS_AUTH_TOKEN=$(openssl rand -hex 16)
@@ -128,17 +161,22 @@ INSTALL_DIR="/opt/n8n"
 mkdir -p "$INSTALL_DIR"
 cd "$INSTALL_DIR"
 
-run_bg "Clone repository" git clone https://github.com/KnowLedZ/n8n-http.git . || true
+echo "[INFO] Cloning repo..."
+git clone https://github.com/KnowLedZ/n8n-http.git . >> "$MAIN_LOG" 2>&1 || true
 
 IP=$(hostname -I | awk '{print $1}')
 
 cat <<EOF > .env
+N8N_VERSION=stable
+
 POSTGRES_USER=$POSTGRES_USER
 POSTGRES_PASSWORD=$POSTGRES_PASSWORD
 POSTGRES_DB=$POSTGRES_DB
 POSTGRES_NON_ROOT_USER=$POSTGRES_NON_ROOT_USER
 POSTGRES_NON_ROOT_PASSWORD=$POSTGRES_NON_ROOT_PASSWORD
+
 RUNNERS_AUTH_TOKEN=$RUNNERS_AUTH_TOKEN
+
 FQDN=$IP
 EOF
 
@@ -153,8 +191,15 @@ echo "[STEP 4/6] Starting containers"
 echo "------------------------------------------"
 
 docker compose up -d >> "$DOCKER_LOG" 2>&1 &
-spin_wait $! "Deploying containers"
+PID=$!
 
+for i in {1..20}; do
+    printf "\r[INFO] Deploying containers... (%d/20)" "$i"
+    sleep 1
+done
+
+wait $PID
+echo ""
 echo "[OK] Containers created"
 
 # ==============================
@@ -180,7 +225,7 @@ echo ""
 echo "[OK] PostgreSQL ready"
 
 # ==============================
-# STEP 6 WAIT N8N REAL READY
+# STEP 6 WAIT N8N
 # ==============================
 echo ""
 echo "------------------------------------------"
@@ -197,9 +242,6 @@ for i in {1..60}; do
     sleep 2
 done
 
-# ==============================
-# DEBUG CONTAINER
-# ==============================
 echo ""
 echo "[INFO] Container status:"
 docker ps
@@ -214,7 +256,7 @@ echo "======================================"
 
 echo "URL:"
 echo "Domain : http://$DOMAIN"
-echo "IP      : http://$IP:5678"
+echo "IP     : http://$IP:5678"
 
 echo ""
 echo "TOKEN:"
