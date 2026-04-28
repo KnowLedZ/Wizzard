@@ -2,15 +2,19 @@
 
 set -e
 
+echo "======================================"
+echo "      AAPANEL INSTALLER WIZARD"
+echo "======================================"
+
 # =========================
-# LOAD CONFIG FILE (OPTIONAL)
+# LOAD CONFIG (OPTIONAL)
 # =========================
 if [ -f /root/aapanel.env ]; then
     source /root/aapanel.env
 fi
 
 # =========================
-# INPUT DARI USER (FALLBACK)
+# INPUT USER
 # =========================
 if [ -z "$AAPANEL_PORT" ]; then
     read -p "Input aaPanel Port: " AAPANEL_PORT
@@ -24,9 +28,7 @@ if [ -z "$AAPANEL_PASS" ]; then
     read -p "Input Password: " AAPANEL_PASS
 fi
 
-# =========================
-# VALIDASI SEDERHANA
-# =========================
+# VALIDASI
 if [ -z "$AAPANEL_PORT" ] || [ -z "$AAPANEL_USER" ] || [ -z "$AAPANEL_PASS" ]; then
     echo "[ERROR] Semua input wajib diisi!"
     exit 1
@@ -36,17 +38,25 @@ fi
 # FIX APT LOCK
 # =========================
 echo "[INFO] Fixing apt lock..."
-while fuser /var/lib/dpkg/lock >/dev/null 2>&1; do sleep 2; done
-while fuser /var/lib/apt/lists/lock >/dev/null 2>&1; do sleep 2; done
+
+while fuser /var/lib/dpkg/lock >/dev/null 2>&1; do
+    sleep 2
+done
+
+while fuser /var/lib/apt/lists/lock >/dev/null 2>&1; do
+    sleep 2
+done
 
 rm -f /var/lib/dpkg/lock*
 rm -f /var/lib/apt/lists/lock*
 rm -f /var/cache/apt/archives/lock
+
 dpkg --configure -a || true
 
 # =========================
 # INSTALL DEPENDENCY
 # =========================
+echo "[INFO] Installing dependencies..."
 apt update -y
 apt install -y curl wget sudo
 
@@ -58,7 +68,7 @@ wget -O install.sh https://www.aapanel.com/script/install-ubuntu_6.0_en.sh
 chmod +x install.sh
 
 # =========================
-# INSTALL AAPANEL
+# INSTALL
 # =========================
 echo "[INFO] Installing aaPanel..."
 yes y | bash install.sh
