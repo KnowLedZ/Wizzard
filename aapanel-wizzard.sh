@@ -27,44 +27,111 @@ spinner() {
 
 # ==============================
 # WAIT APT LOCK (unlimited, spinner)
+# Dipanggil sebelum SETIAP apt-get command
 # ==============================
-wait_pkg_manager() {
-    if [ ! -f "/usr/bin/apt-get" ]; then
-        echo "[OK] apt ready"
-        return
+wait_apt_lock() {
+    local label="${1:-apt}"
+
+    # Kalau bukan apt system, skip
+    [ ! -f "/usr/bin/apt-get" ] && return 0
+
+    # Cek apakah ada lock aktif dulu sebelum spin
+    if ! fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1 && \
+       ! fuser /var/lib/apt/lists/lock >/dev/null 2>&1 && \
+       ! fuser /var/lib/dpkg/lock >/dev/null 2>&1 && \
+       ! fuser /var/cache/apt/archives/lock >/dev/null 2>&1; then
+        return 0
     fi
 
-    echo "[INFO] Preparing apt (production-safe)..."
-
-    # Tunggu sampai semua lock bebas, tanpa batas retry
-    (
-        while fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1 || \
-              fuser /var/lib/apt/lists/lock >/dev/null 2>&1 || \
-              fuser /var/lib/dpkg/lock >/dev/null 2>&1 || \
-              fuser /var/cache/apt/archives/lock >/dev/null 2>&1; do
-            sleep 1
-        done
-    ) &
-
-    local WAIT_PID=$!
     local spin='-\|/'
     local i=0
     local elapsed=0
 
-    while kill -0 $WAIT_PID 2>/dev/null; do
+    while fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1 || \
+          fuser /var/lib/apt/lists/lock >/dev/null 2>&1 || \
+          fuser /var/lib/dpkg/lock >/dev/null 2>&1 || \
+          fuser /var/cache/apt/archives/lock >/dev/null 2>&1; do
         i=$(( (i+1) % 4 ))
-        printf "\r[WAIT] apt locked... %s (%ds elapsed)" "${spin:$i:1}" "$elapsed"
-        sleep 0.5
+        printf "\r[WAIT] %s locked... %s (%ds elapsed)" "$label" "${spin:$i:1}" "$elapsed"
+        sleep 1
         elapsed=$(( elapsed + 1 ))
     done
 
-    wait $WAIT_PID
-    printf "\r%-60s\r" " "
+    printf "\r%-70s\r" " "
+}
+
+# ==============================
+# KILL PROSES YANG BLOCK APT
+# (unattended-upgrades, apt-get dist-upgrade dari cloud-init)
+# ==============================
+kill_apt_blockers() {
+    [ ! -f "/usr/bin/apt-get" ] && return 0
+
+    # Nonaktifkan unattended-upgrades sementara
+    systemctl stop unattended-upgrades 2>/dev/null || true
+    systemctl disable unattended-upgrades 2>/dev/null || true
+
+    # Kill proses apt/dpkg yang berjalan (selain proses kita sendiri)
+    local BLOCKER_PIDS
+    BLOCKER_PIDS=$(ps aux | grep -E '(apt-get|apt |dpkg)' | grep -v grep | grep -v $$ | awk '{print $2}')
+    if [ -n "$BLOCKER_PIDS" ]; then
+        echo "[INFO] Menunggu proses apt selesai..."
+        # Tunggu dulu secara graceful, jangan langsung kill
+        for pid in $BLOCKER_PIDS; do
+            # Tunggu max 120 detik per proses
+            local w=0
+            while kill -0 "$pid" 2>/dev/null && [ $w -lt 120 ]; do
+                printf "\r[WAIT] Menunggu PID %s selesai... (%ds)" "$pid" "$w"
+                sleep 2
+                w=$(( w + 2 ))
+            done
+            printf "\r%-70s\r" " "
+            # Kalau masih jalan setelah timeout, baru kill
+            if kill -0 "$pid" 2>/dev/null; then
+                echo "[INFO] Terminating stuck apt process PID $pid"
+                kill -9 "$pid" 2>/dev/null || true
+            fi
+        done
+    fi
+
+    # Hapus lock file yang mungkin ditinggal
+    rm -f /var/lib/dpkg/lock-frontend 2>/dev/null || true
+    rm -f /var/lib/dpkg/lock 2>/dev/null || true
+    rm -f /var/cache/apt/archives/lock 2>/dev/null || true
+
+    # Repair dpkg jika perlu
+    dpkg --configure -a >> "$MAIN_LOG" 2>&1 || true
+
     echo "[OK] apt ready"
 }
 
 # ==============================
-# RUN WITH SPINNER
+# RUN APT DENGAN AUTO WAIT LOCK
+# ==============================
+run_apt() {
+    local MSG="$1"
+    shift
+
+    wait_apt_lock "$MSG"
+
+    DEBIAN_FRONTEND=noninteractive "$@" >> "$MAIN_LOG" 2>&1 &
+    local PID=$!
+
+    spinner $PID "$MSG"
+    wait $PID
+    local EXIT_CODE=$?
+
+    if [ $EXIT_CODE -ne 0 ]; then
+        echo "[ERROR] $MSG failed! (exit $EXIT_CODE)"
+        echo "[INFO] Check log: $MAIN_LOG"
+        exit 1
+    fi
+
+    echo "[OK] $MSG"
+}
+
+# ==============================
+# RUN GENERIC DENGAN SPINNER
 # ==============================
 run_step() {
     local MSG="$1"
@@ -113,8 +180,9 @@ detect_os() {
 # CHECK PANEL PROCESS
 # ==============================
 check_panel_running() {
-    # Cek semua kemungkinan nama proses aaPanel
     local PID=""
+
+    # Cek semua kemungkinan nama proses aaPanel
     PID=$(ps aux | grep -E 'BT-Panel|btpanel|panel\.py' | grep -v grep | awk '{print $2}' | head -1)
 
     # Fallback: cek via PID file
@@ -127,7 +195,7 @@ check_panel_running() {
         fi
     fi
 
-    # Fallback: cek via port file
+    # Fallback: cek via port yang sedang listen
     if [ -z "$PID" ]; then
         local PORT
         PORT=$(cat /www/server/panel/data/port.pl 2>/dev/null || echo "")
@@ -161,12 +229,15 @@ echo "[STEP 1/6] Prepare system"
 echo "------------------------------------------"
 
 detect_os
-wait_pkg_manager
 
 if [ "${PM}" = "apt-get" ]; then
-    run_step "Updating apt index" apt-get update -y
-    run_step "Installing dependencies" apt-get install -y \
+    # Bunuh dulu proses apt blocker dari cloud-init/unattended-upgrades
+    kill_apt_blockers
+
+    run_apt "Updating apt index" apt-get update -y
+    run_apt "Installing dependencies" apt-get install -y \
         wget curl tar unzip openssl ca-certificates git sudo net-tools
+
 elif [ "${PM}" = "yum" ]; then
     run_step "Installing dependencies" yum install -y \
         wget curl tar unzip openssl ca-certificates git sudo net-tools
@@ -203,7 +274,7 @@ while true; do
 done
 PANEL_PASSWORD=$P1
 
-# Safe path (security slug after port)
+# Safe path (security slug setelah port)
 DEFAULT_SAFE=$(cat /dev/urandom | head -n 16 | md5sum | head -c 8)
 read -p "Panel safe path [$DEFAULT_SAFE]: " SAFE_PATH
 SAFE_PATH=${SAFE_PATH:-$DEFAULT_SAFE}
@@ -307,7 +378,7 @@ while true; do
         "$ELAPSED"
 
     if [ -n "$PANEL_PID" ]; then
-        printf "\r%-60s\r" " "
+        printf "\r%-70s\r" " "
         echo "[OK] Panel running (PID: $PANEL_PID, ${ELAPSED}s)"
         break
     fi
@@ -342,7 +413,7 @@ for i in $(seq 1 10); do
         "$PANEL_PORT_FILE" "${spin:$si:1}" "$i"
     sleep 2
 done
-printf "\r%-60s\r" " "
+printf "\r%-70s\r" " "
 
 # Get public IP only
 IP_PUBLIC=$(curl -4 -sS --connect-timeout 10 -m 15 https://ifconfig.me 2>/dev/null || \
