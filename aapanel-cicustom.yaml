@@ -58,7 +58,6 @@ write_files:
 
       # ✅ CLEANUP
       rm -f /root/setup-vm.sh
-      rm -f /root/aapanel-installer.sh
 
       echo ""
       echo "[INFO] Installation aaPanel finished"
