@@ -49,11 +49,6 @@ write_files:
           sleep 2
       done
 
-      if ! ss -lnt | grep -q ":3001"; then
-          echo "[WARNING] Port 3001 belum terbuka!"
-          return
-      fi
-
       # ✅ MARK DONE (SETELAH BENAR2 SELESAI)
       touch /root/.uptime-kuma_installed
 
