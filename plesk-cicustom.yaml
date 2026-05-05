@@ -56,8 +56,6 @@ write_files:
       # WAIT PANEL READY (PLESK)
       # =========================
       echo ""
-      echo "[INFO] Verifikasi service Plesk..."
-
       for i in {1..60}; do
           if systemctl is-active psa.service >/dev/null 2>&1; then
             echo "[OK] Plesk service sudah running"
