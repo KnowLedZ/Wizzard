@@ -169,6 +169,9 @@ IP=$(hostname -I | awk '{print $1}')
 cat <<EOF > .env
 # Database (required)
 PAPERCLIP_DB_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+POSTGRES_USER=${POSTGRES_USER}
+POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+POSTGRES_DB=${POSTGRES_DB}
 
 # Job queue (required for production)
 PAPERCLIP_REDIS_URL=redis://redis:6379
