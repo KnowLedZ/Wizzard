@@ -35,24 +35,18 @@ write_files:
           return
       fi
 
+      # =========================
+      # WAIT PANEL READY (Docker)
+      # =========================
+      echo ""
       for i in {1..60}; do
-          RUNNING=$(docker ps --format '{{.Names}}' | grep -c docker || true)
-
-          if [ "$RUNNING" -ge 1 ]; then
-              echo ""
-              echo "[OK] docker sudah running"
-              break
+          if systemctl is-active docker.service >/dev/null 2>&1; then
+            echo "[OK] Docker service sudah running"
+            break
           fi
-
-          echo ""
-          echo "[WAIT] docker belum ready ($i/60)"
+          echo "[WAIT] Docker belum ready ($i/60)"
           sleep 2
       done
-
-      if ! ss -lnt | grep -q ":5678"; then
-          echo "[WARNING] Port 5678 belum terbuka!"
-          return
-      fi
 
       # ✅ MARK DONE (SETELAH BENAR2 SELESAI)
       touch /root/.docker_installed
