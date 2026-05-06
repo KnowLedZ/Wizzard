@@ -18,7 +18,7 @@ LOG_FILE="/var/log/hestia-install.log"
 # =========================
 spinner() {
     local pid=$1
-    local msg=$2
+    local msg="$2"
     local spin='-\|/'
     local i=0
 
@@ -67,14 +67,49 @@ echo -e "${YELLOW}[STEP 1/4] Prepare system${NC}"
 spinner $! "Preparing dependencies"
 
 # =========================================================
-# STEP 2 INPUT
+# FIX: REMOVE UFW
+# =========================================================
+echo -e "${YELLOW}[FIX] Removing conflicting firewall (ufw)${NC}"
+
+(
+    systemctl stop ufw >/dev/null 2>&1 || true
+    systemctl disable ufw >/dev/null 2>&1 || true
+    apt remove -y ufw >/dev/null 2>&1 || true
+    apt purge -y ufw >/dev/null 2>&1 || true
+) &
+spinner $! "Cleaning UFW"
+
+# =========================================================
+# STEP 2 INPUT + VALIDASI USERNAME
 # =========================================================
 echo -e "${YELLOW}[STEP 2/4] Configuration${NC}"
 
 HOSTNAME_DEFAULT=$(hostname -f 2>/dev/null || hostname)
 
-read -p "Username        : " USERNAME
+while true; do
+    read -p "Username        : " USERNAME
 
+    if [[ -z "$USERNAME" ]]; then
+        echo -e "${RED}[ERROR] Username tidak boleh kosong${NC}"
+        continue
+    fi
+
+    # cek user & group di sistem
+    if getent passwd "$USERNAME" >/dev/null || getent group "$USERNAME" >/dev/null; then
+        echo -e "${RED}[ERROR] Username / group sudah ada, pakai yang lain!${NC}"
+        continue
+    fi
+
+    # optional: block nama reserved
+    if [[ "$USERNAME" == "admin" ]]; then
+        echo -e "${RED}[ERROR] Username 'admin' sering bentrok di Hestia, gunakan nama lain${NC}"
+        continue
+    fi
+
+    break
+done
+
+# PASSWORD
 while true; do
     read -s -p "Password        : " P1; echo ""
     read -s -p "Confirm Pass    : " P2; echo ""
@@ -88,6 +123,7 @@ read -p "Domain ($HOSTNAME_DEFAULT) : " FQDN
 FQDN=${FQDN:-$HOSTNAME_DEFAULT}
 
 read -p "Port            : " PORT
+PORT=${PORT:-8083}
 
 # =========================
 # DB CHOICE
