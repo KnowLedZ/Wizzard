@@ -58,7 +58,9 @@ CONFIRM=${CONFIRM:-Y}
 # =========================================================
 # STEP 1
 # =========================================================
+echo -e "${YELLOW}--------------------------------------${NC}"
 echo -e "${YELLOW}[STEP 1/4] Prepare system${NC}"
+echo -e "${YELLOW}--------------------------------------${NC}"
 
 (
     apt update -y >/dev/null 2>&1
@@ -67,9 +69,9 @@ echo -e "${YELLOW}[STEP 1/4] Prepare system${NC}"
 spinner $! "Preparing dependencies"
 
 # =========================================================
-# FIX: REMOVE UFW
+# REMOVE UFW
 # =========================================================
-echo -e "${YELLOW}[FIX] Removing conflicting firewall (ufw)${NC}"
+echo -e "${YELLOW}[FIX] Removing conflicting dependencies (ufw)${NC}"
 
 (
     systemctl stop ufw >/dev/null 2>&1 || true
@@ -78,51 +80,73 @@ echo -e "${YELLOW}[FIX] Removing conflicting firewall (ufw)${NC}"
     apt purge -y ufw >/dev/null 2>&1 || true
 ) &
 spinner $! "Cleaning UFW"
+echo ""
 
 # =========================================================
-# STEP 2 INPUT + VALIDASI USERNAME
+# STEP 2 INPUT
 # =========================================================
+echo -e "${YELLOW}--------------------------------------${NC}"
 echo -e "${YELLOW}[STEP 2/4] Configuration${NC}"
+echo -e "${YELLOW}--------------------------------------${NC}"
 
 HOSTNAME_DEFAULT=$(hostname -f 2>/dev/null || hostname)
 
+# =========================
+# USERNAME VALIDATION
+# =========================
 while true; do
     read -p "Username        : " USERNAME
 
-    if [[ -z "$USERNAME" ]]; then
-        echo -e "${RED}[ERROR] Username tidak boleh kosong${NC}"
-        continue
-    fi
+    [[ -z "$USERNAME" ]] && echo -e "${RED}Tidak boleh kosong${NC}" && continue
 
-    # cek user & group di sistem
     if getent passwd "$USERNAME" >/dev/null || getent group "$USERNAME" >/dev/null; then
-        echo -e "${RED}[ERROR] Username / group sudah ada, pakai yang lain!${NC}"
+        echo -e "${RED}Username sudah ada${NC}"
         continue
     fi
 
-    # optional: block nama reserved
     if [[ "$USERNAME" == "admin" ]]; then
-        echo -e "${RED}[ERROR] Username 'admin' sering bentrok di Hestia, gunakan nama lain${NC}"
+        echo -e "${RED}Hindari username 'admin'${NC}"
         continue
     fi
 
     break
 done
 
+# =========================
 # PASSWORD
+# =========================
 while true; do
     read -s -p "Password        : " P1; echo ""
     read -s -p "Confirm Pass    : " P2; echo ""
     [[ "$P1" == "$P2" && -n "$P1" ]] && break
-    echo -e "${RED}[ERROR] Password mismatch${NC}"
+    echo -e "${RED}Password mismatch${NC}"
 done
 PASSWORD=$P1
 
-read -p "Email           : " EMAIL
+# =========================
+# EMAIL VALIDATION
+# =========================
+while true; do
+    read -p "Email           : " EMAIL
+
+    # regex email sederhana tapi valid
+    if [[ "$EMAIL" =~ ^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$ ]]; then
+        break
+    else
+        echo -e "${RED}[ERROR] Format email tidak valid! contoh: user@domain.com${NC}"
+    fi
+done
+
+# =========================
+# DOMAIN
+# =========================
 read -p "Domain ($HOSTNAME_DEFAULT) : " FQDN
 FQDN=${FQDN:-$HOSTNAME_DEFAULT}
 
-read -p "Port            : " PORT
+# =========================
+# PORT
+# =========================
+read -p "Port      (8083): " PORT
 PORT=${PORT:-8083}
 
 # =========================
@@ -142,11 +166,14 @@ while true; do
         *) echo -e "${RED}Invalid choice${NC}" ;;
     esac
 done
+echo ""
 
 # =========================================================
 # STEP 3 INSTALL
 # =========================================================
+echo -e "${YELLOW}--------------------------------------${NC}"
 echo -e "${YELLOW}[STEP 3/4] Install Hestia${NC}"
+echo -e "${YELLOW}--------------------------------------${NC}"
 
 (
     wget -O /root/install.sh https://raw.githubusercontent.com/hestiacp/hestiacp/release/install/hst-install.sh >/dev/null 2>&1
@@ -165,11 +192,14 @@ spinner $! "Downloading installer"
         --interactive no > "$LOG_FILE" 2>&1
 ) &
 spinner $! "Installing Hestia (5-10 minutes)"
+echo ""
 
 # =========================================================
 # STEP 4 INFO
 # =========================================================
+echo -e "${YELLOW}--------------------------------------${NC}"
 echo -e "${YELLOW}[STEP 4/4] Login Information${NC}"
+echo -e "${YELLOW}--------------------------------------${NC}"
 
 IP=$(hostname -I | awk '{print $1}')
 
