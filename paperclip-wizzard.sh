@@ -133,15 +133,15 @@ echo -e "${YELLOW}--------------------------------------------${NC}"
 echo ""
 
 HOSTNAME=$(hostname -f 2>/dev/null || hostname)
-read -p "Domain           ($HOSTNAME) : " DOMAIN
+read -p "Domain ($HOSTNAME) : " DOMAIN
 read -p "Database Name (paperclip) : " POSTGRES_DB
 POSTGRES_DB=${POSTGRES_DB:-paperclip}
-read -p "POSTGRES_USER (paperclip) : " POSTGRES_USER
+read -p "Postgres User (paperclip) : " POSTGRES_USER
 POSTGRES_DB=${POSTGRES_USER:-paperclip}
 
 while true; do
-    read -s -p "POSTGRES_PASSWORD : " P1; echo ""
-    read -s -p "Re-enter password : " P2; echo ""
+    read -s -p "Postgres Password : " P1; echo ""
+    read -s -p "Re-enter Password : " P2; echo ""
     [[ "$P1" == "$P2" && -n "$P1" ]] && break
     echo -e "${RED}[ERROR]${NC} Password mismatch"
 done
